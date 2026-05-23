@@ -1,0 +1,116 @@
+---
+- name: Configure Minecraft server
+  hosts: all
+  become: true
+
+  vars:
+    aws_region: "us-east-1"
+    ecr_registry: "731401215014.dkr.ecr.us-east-1.amazonaws.com"
+    minecraft_image: "731401215014.dkr.ecr.us-east-1.amazonaws.com/mc-server:mc-1.21.1-build1"
+    s3_bucket: "minecraft-server-baruelaa-backups"
+    minecraft_data_dir: "/opt/minecraft/data"
+
+  tasks:
+
+    # -----------------------------------------------------------------------
+    # Install prerequisites
+    # -----------------------------------------------------------------------
+
+    - name: Update apt cache
+      apt:
+        update_cache: yes
+        cache_valid_time: 3600
+
+    - name: Install required packages
+      apt:
+        name:
+          - docker.io
+          - awscli
+          - python3-pip
+        state: present
+
+    - name: Install Docker Python SDK
+      pip:
+        name: docker
+        state: present
+
+    - name: Start and enable Docker
+      service:
+        name: docker
+        state: started
+        enabled: yes
+
+    # -----------------------------------------------------------------------
+    # Authenticate to ECR using instance profile credentials
+    # -----------------------------------------------------------------------
+
+    - name: Authenticate Docker to ECR
+      shell: |
+        aws ecr get-login-password --region {{ aws_region }} | \
+        docker login --username AWS --password-stdin {{ ecr_registry }}
+      changed_when: false
+
+    # -----------------------------------------------------------------------
+    # Create data directory and restore world from S3
+    # -----------------------------------------------------------------------
+
+    - name: Create Minecraft data directory
+      file:
+        path: "{{ minecraft_data_dir }}"
+        state: directory
+        mode: '0755'
+
+    - name: Restore world data from S3 (if backup exists)
+      shell: |
+        aws s3 sync s3://{{ s3_bucket }}/world {{ minecraft_data_dir }} --region {{ aws_region }}
+      register: s3_restore
+      failed_when: false
+      changed_when: s3_restore.rc == 0
+
+    # -----------------------------------------------------------------------
+    # Pull Minecraft image from ECR
+    # -----------------------------------------------------------------------
+
+    - name: Pull Minecraft image from ECR
+      docker_image:
+        name: "{{ minecraft_image }}"
+        source: pull
+        force_source: yes
+
+    # -----------------------------------------------------------------------
+    # Start Minecraft container
+    # -----------------------------------------------------------------------
+
+    - name: Start Minecraft container
+      docker_container:
+        name: minecraft
+        image: "{{ minecraft_image }}"
+        state: started
+        restart_policy: unless-stopped
+        ports:
+          - "25565:25565"
+        volumes:
+          - "{{ minecraft_data_dir }}:/data"
+        env:
+          EULA: "TRUE"
+          MEMORY: "2G"
+          VERSION: "1.21.1"
+          JAVA: "21"
+          MOTD: "baruelaa <3"
+        detach: yes
+
+    # -----------------------------------------------------------------------
+    # Verify container is running
+    # -----------------------------------------------------------------------
+
+    - name: Verify Minecraft container is running
+      docker_container_info:
+        name: minecraft
+      register: container_info
+
+    - name: Confirm container is running
+      assert:
+        that:
+          - container_info.container.State.Running == true
+        fail_msg: "Minecraft container is not running"
+        success_msg: "Minecraft container is running successfully"

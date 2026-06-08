@@ -1,0 +1,51 @@
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: minecraft-alerts
+  namespace: monitoring
+  labels:
+    release: monitoring
+spec:
+  groups:
+    - name: minecraft.rules
+      rules:
+        - alert: MinecraftPodCrashLooping
+          expr: increase(kube_pod_container_status_restarts_total{namespace="default", pod=~"minecraft-.*"}[5m]) > 3
+          for: 1m
+          labels:
+            severity: critical
+          annotations:
+            summary: "Minecraft pod {{ $labels.pod }} is crash looping"
+            runbook: |
+              1. Run: kubectl describe pod {{ $labels.pod }} -n default
+              2. Check Events section for error messages
+              3. Check logs: kubectl logs {{ $labels.pod }} --previous
+              4. If bad image: kubectl rollout undo deployment/minecraft
+              5. If OOM: increase memory limit in deployment manifest
+
+        - alert: MinecraftServiceDown
+          expr: kube_pod_status_ready{namespace="default", pod=~"minecraft-.*", condition="true"} == 0
+          for: 1m
+          labels:
+            severity: critical
+          annotations:
+            summary: "Minecraft server is unreachable - players cannot connect"
+            runbook: |
+              1. Run: kubectl get pods -n default
+              2. If pod is not Running: kubectl describe pod <name> -n default
+              3. Check logs: kubectl logs <name> -n default
+              4. If pod is Running but not ready, check startup probe (port 25565)
+              5. Verify service: kubectl get svc minecraft -n default
+
+        - alert: NodeDiskPressure
+          expr: 100 - (node_filesystem_avail_bytes{mountpoint="/"} / node_filesystem_size_bytes{mountpoint="/"} * 100) > 80
+          for: 2m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Disk usage above 80% - Minecraft world data at risk"
+            runbook: |
+              1. Check disk usage: df -h on the node
+              2. Run: du -sh /var/lib/rancher/k3s/storage/* to find large volumes
+              3. Check if old world backups are consuming space in S3 or locally
+              4. If critical, consider expanding EBS volume in AWS console

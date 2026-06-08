@@ -1,0 +1,11 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: minecraft-config
+  namespace: default
+data:
+  EULA: "TRUE"
+  MEMORY: "2G"
+  VERSION: "1.21.1"
+  JAVA: "21"
+  MOTD: "baruelaa <3"
